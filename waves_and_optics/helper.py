@@ -238,3 +238,99 @@ def ring_wave_animation(R=1.0, a=0.18, m=4, c=1.0, Nframes=160, Nt=360):
     html = ani.to_jshtml()
     plt.close(fig)
     return HTML(html)
+
+import numpy as np
+from scipy.optimize import minimize
+
+class RayleighQuotientMinimizer:
+    """
+    Minimize the Rayleigh quotient on [0, L] with Dirichlet boundary conditions:
+
+        R[phi] = ∫ |phi'(x)|^2 dx / ∫ |phi(x)|^2 dx
+    """
+
+    def __init__(self, L=1.0, N=801,
+                 method="L-BFGS-B",
+                 maxiter=200000,
+                 ftol=1e-12):
+        self.L = float(L)
+        self.N = int(N)
+        self.x = np.linspace(0.0, L, N)
+        self.dx = self.x[1] - self.x[0]
+
+        self.method = method
+        self.options = {
+            "maxiter": maxiter,
+            "maxfun": maxiter,
+            "ftol": ftol,
+        }
+
+    def _objective(self, u_vec):
+        phi = np.zeros(self.N)
+        phi[1:-1] = u_vec
+
+        den = np.sum(phi**2) * self.dx
+        if den <= 1e-18:
+            return 1e6
+
+        dphi = np.gradient(phi, self.dx)
+        num = np.sum(dphi**2) * self.dx
+
+        return num / den
+
+    def solve(self, guess_fn):
+        """
+        Parameters
+        ----------
+        guess_fn : callable
+            A function guess_fn(x_array) returning a vector of shape (N,).
+
+        Returns
+        -------
+        x : np.ndarray
+            Grid points.
+        phi_star : np.ndarray
+            Normalized minimized eigenfunction.
+        R_star : float
+            Rayleigh quotient.
+        """
+        if not callable(guess_fn):
+            raise TypeError("guess_fn must be a callable f(x).")
+
+        phi0 = np.asarray(guess_fn(self.x), dtype=float)
+        if phi0.shape != (self.N,):
+            raise ValueError(f"guess_fn(x) must return shape ({self.N},).")
+
+        # Enforce boundary conditions
+        phi0 = phi0.copy()
+        phi0[0] = 0.0
+        phi0[-1] = 0.0
+
+        u0 = phi0[1:-1].copy()
+
+        res = minimize(
+            self._objective,
+            u0,
+            method=self.method,
+            options=self.options,
+        )
+
+        phi_star = np.zeros(self.N)
+        phi_star[1:-1] = res.x
+
+        # normalize
+        phi_star /= np.max(np.abs(phi_star))
+
+        # compute Rayleigh quotient
+        dphi = np.gradient(phi_star, self.dx)
+        num = np.sum(dphi**2) * self.dx
+        den = np.sum(phi_star**2) * self.dx
+        R_star = num / den
+
+        return self.x, phi_star, R_star
+
+
+def run_rayleigh_from_initial_guess(guess_fn, L=1.0, N=801):
+    solver = RayleighQuotientMinimizer(L=L, N=N)
+    return solver.solve(guess_fn)
+
